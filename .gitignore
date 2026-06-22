@@ -1,0 +1,6 @@
+build/
+build-*/
+bridge/build/
+data/
+*.o
+*.dSYM/
