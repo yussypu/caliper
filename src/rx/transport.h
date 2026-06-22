@@ -46,6 +46,10 @@ class Transport {
   // The book band for this run: from the feed file, or synthetic defaults.
   BookBand book_band() const;
 
+  // True when rx_ts and tx_ts are NIC hardware nanoseconds, false when they are
+  // rdtscp ticks. The harness uses this to record the wire histogram correctly.
+  bool wire_hardware() const;
+
   const char* backend() const;
 
  private:

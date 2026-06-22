@@ -4,6 +4,12 @@ Every number in README.md and docs/hunt.md comes from the run described here.
 A latency without its host config is not reproducible, so this file ships next
 to the numbers.
 
+This file is the af_xdp bypass configuration, which isolates the userspace
+compute with rdtscp endpoints over a veth pair. The second configuration, the
+real NIC hardware wire to wire across two hosts, has its own provenance in
+results/hardware/host.md. The two measure different things and are both
+published; see docs/hunt.md finding G for how they bracket the path.
+
 ## machine
 
 - CPU: AMD Ryzen 5 3600, 6 cores, 12 threads, single socket, Zen 2

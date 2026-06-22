@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include "book/book.h"
 #include "common/platform.h"
@@ -25,7 +27,7 @@
 namespace caliper {
 namespace {
 
-constexpr uint64_t kHistMaxNs = 10'000'000;  // 10 ms ceiling
+constexpr uint64_t kHistMaxNs = 100'000'000;  // 100 ms ceiling, holds the kernel path tail
 constexpr int kSigFigs = 3;
 
 void apply_host_runtime() {
@@ -48,7 +50,12 @@ void apply_host_runtime() {
 #endif
 }
 
-void ensure_results_dir() { mkdir("results", 0755); }
+// Output directory: CALIPER_OUT overrides the default so the hardware timestamp
+// run and the af_xdp run write to separate dirs and never overwrite each other.
+std::string out_dir() {
+  const char* o = std::getenv("CALIPER_OUT");
+  return o ? std::string(o) : std::string("results");
+}
 
 uint64_t sub_overhead(uint64_t ticks, uint64_t overhead) {
   return ticks > overhead ? ticks - overhead : 0;
@@ -81,7 +88,8 @@ void print_summary(const char* label, const Histogram& h,
 
 int run() {
   apply_host_runtime();
-  ensure_results_dir();
+  std::string out = out_dir();
+  mkdir(out.c_str(), 0755);
 
   timing::Calibration cal = timing::calibrate();
 
@@ -110,6 +118,12 @@ int run() {
               static_cast<unsigned long long>(cal.overhead_ticks));
   std::printf("caliper symbol=%.8s book=%d levels base=%lld\n",
               band.symbol, band.levels, static_cast<long long>(band.price_base));
+
+  // The wire histogram is in PHC nanoseconds on the hardware path, rdtscp ticks
+  // otherwise. A calibration with ns_per_tick 1.0 prints the ns directly.
+  const bool wire_hw = transport.wire_hardware();
+  timing::Calibration wire_cal = cal;
+  if (wire_hw) wire_cal.ns_per_tick = 1.0;
 
   pmu.start();
 
@@ -143,11 +157,27 @@ int run() {
       h_decide.record(sub_overhead(t3 - t2, cal.overhead_ticks));
       h_encode.record(sub_overhead(t4 - t3, cal.overhead_ticks));
 
-      uint64_t w2w = sub_overhead(tx_ts - pkt.rx_ts, cal.overhead_ticks);
-      uint64_t expected_ticks = static_cast<uint64_t>(
-          static_cast<double>(expected_interval_ns) / cal.ns_per_tick);
-      h_wire.record(w2w);
-      h_wire_co.record_corrected(w2w, expected_ticks);
+      // On the hardware path rx_ts and tx_ts are PHC nanoseconds, recorded as is
+      // with no rdtscp overhead. A missed hardware tx stamp returns 0, and that
+      // wire sample is skipped rather than fabricated. On the rdtscp path the
+      // endpoints are ticks and the clock overhead comes off.
+      // On the hardware path tx_ts must be strictly after rx_ts; anything else
+      // is a mispaired stamp and is dropped rather than recorded as an underflow.
+      bool wire_ok = tx_ts != 0 && (!wire_hw || tx_ts > pkt.rx_ts);
+      if (wire_ok) {
+        uint64_t w2w;
+        uint64_t expected;
+        if (wire_hw) {
+          w2w = tx_ts - pkt.rx_ts;
+          expected = expected_interval_ns;
+        } else {
+          w2w = sub_overhead(tx_ts - pkt.rx_ts, cal.overhead_ticks);
+          expected = static_cast<uint64_t>(
+              static_cast<double>(expected_interval_ns) / cal.ns_per_tick);
+        }
+        h_wire.record(w2w);
+        h_wire_co.record_corrected(w2w, expected);
+      }
       orders++;
     }
   }
@@ -156,8 +186,8 @@ int run() {
 
   std::printf("\nclosed loop done: %llu orders fired\n",
               static_cast<unsigned long long>(orders));
-  print_summary("tick to trade", h_wire, cal);
-  print_summary("tick to trade (CO)", h_wire_co, cal);
+  print_summary("tick to trade", h_wire, wire_cal);
+  print_summary("tick to trade (CO)", h_wire_co, wire_cal);
   print_summary("  decode", h_decode, cal);
   print_summary("  book", h_book, cal);
   print_summary("  decide", h_decide, cal);
@@ -181,16 +211,16 @@ int run() {
     std::printf("\npmu: not available on this backend\n");
   }
 
-  write_table("results/tick_to_trade.csv", h_wire, cal);
-  write_table("results/tick_to_trade_co.csv", h_wire_co, cal);
-  h_wire.write_cdf("results/cdf_wire.csv", cal.ns_per_tick);
-  h_wire_co.write_cdf("results/cdf_wire_co.csv", cal.ns_per_tick);
-  h_decode.write_cdf("results/cdf_decode.csv", cal.ns_per_tick);
-  h_book.write_cdf("results/cdf_book.csv", cal.ns_per_tick);
-  h_decide.write_cdf("results/cdf_decide.csv", cal.ns_per_tick);
-  h_encode.write_cdf("results/cdf_encode.csv", cal.ns_per_tick);
+  write_table((out + "/tick_to_trade.csv").c_str(), h_wire, wire_cal);
+  write_table((out + "/tick_to_trade_co.csv").c_str(), h_wire_co, wire_cal);
+  h_wire.write_cdf((out + "/cdf_wire.csv").c_str(), wire_cal.ns_per_tick);
+  h_wire_co.write_cdf((out + "/cdf_wire_co.csv").c_str(), wire_cal.ns_per_tick);
+  h_decode.write_cdf((out + "/cdf_decode.csv").c_str(), cal.ns_per_tick);
+  h_book.write_cdf((out + "/cdf_book.csv").c_str(), cal.ns_per_tick);
+  h_decide.write_cdf((out + "/cdf_decide.csv").c_str(), cal.ns_per_tick);
+  h_encode.write_cdf((out + "/cdf_encode.csv").c_str(), cal.ns_per_tick);
 
-  std::printf("\nwrote results/ (percentile tables and CDFs)\n");
+  std::printf("\nwrote %s (percentile tables and CDFs)\n", out.c_str());
   return 0;
 }
 

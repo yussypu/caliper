@@ -7,6 +7,11 @@ namespace caliper {
 
 namespace {
 
+// Most omitted samples a single CO back fill records. Legitimate correction on a
+// paced feed is tens of samples; this bounds a stall artifact so one huge value
+// cannot spin the loop for millions of iterations.
+constexpr uint64_t kMaxBackfill = 1024;
+
 int count_leading_zeros(uint64_t v) {
   if (v == 0) return 64;
   return __builtin_clzll(v);
@@ -69,8 +74,14 @@ uint64_t Histogram::value_for(size_t index) const {
 void Histogram::record_corrected(uint64_t value, uint64_t expected_interval) {
   record(value);
   if (expected_interval == 0 || value <= expected_interval) return;
+  // Back fill the omitted samples, but bound the loop. A value many thousands of
+  // intervals above expected is a stall artifact, not that many real omissions,
+  // and the unbounded loop would spin for millions of iterations on one sample.
+  // Past this many the back filled values exceed the tracked range anyway.
+  uint64_t added = 0;
   for (uint64_t missing = value - expected_interval;
-       missing >= expected_interval; missing -= expected_interval) {
+       missing >= expected_interval && added < kMaxBackfill;
+       missing -= expected_interval, ++added) {
     record(missing);
   }
 }

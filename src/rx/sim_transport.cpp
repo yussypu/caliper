@@ -88,6 +88,8 @@ BookBand Transport::book_band() const {
   return b;
 }
 
+bool Transport::wire_hardware() const { return false; }
+
 const char* Transport::backend() const { return "sim"; }
 
 }  // namespace caliper

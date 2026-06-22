@@ -122,6 +122,30 @@ their result lines stay open rather than carry invented numbers.
 - result: confirmed. After this the userspace compute is small enough that tick
   to trade is bound by the tx wakeup, not by caliper's work.
 
+### G. the kernel and NIC tax, measured against real hardware timestamps
+
+- symptom: the af_xdp numbers are bypass, with rdtscp software endpoints over a
+  veth pair, not a real wire to wire. The open question was what the kernel rx
+  and tx path plus the NIC actually cost on a socket datapath.
+- measurement: a second configuration, the so_timestamping backend, binds a real
+  udp socket on enp35s0.4000 with SO_TIMESTAMPING, and a second host replays the
+  AAPL day to it at 10000 pps. rx_ts and tx_ts are real igb PHC hardware stamps,
+  matched to the order by OPT_ID, so tick to trade is a true NIC to NIC wire to
+  wire. Over 2,082,382 orders with a 100 percent hardware tx stamp yield: median
+  28655 ns, p99 32239 ns, p99.9 35295 ns, p99.99 81791 ns, max 272162 ns. The
+  per stage rdtscp compute is unchanged from the bypass run, decode 10, book 30,
+  decide 10, encode 20 ns, summing to 70 ns.
+- cause: the median minus the 70 ns of userspace compute leaves about 28585 ns.
+  That residual is the kernel rx path from the NIC to recvmsg, the kernel tx path
+  from sendto to the NIC, the NIC, and the on host wire.
+- fix: none, this is the cost of a socket datapath. It is the reason colocated
+  systems bypass the kernel with af_xdp or dpdk.
+- result: confirmed. The two configurations bracket the path: the bypass run
+  isolates the 70 ns of compute, the hardware run shows the roughly 28.6 us the
+  kernel and NIC add on top. The hardware path's tail past p99.99 is kernel
+  scheduling and softirq jitter off the isolated core, which the bypass path,
+  polling on the hot core, does not pay. Provenance in results/hardware/host.md.
+
 ## load
 
 Tick to trade holds flat under offered load. Sweeping the sender from 100 kpps

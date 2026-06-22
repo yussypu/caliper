@@ -2,7 +2,7 @@
 
 A closed loop tick to trade latency lab on x86_64. It takes market data in over the wire, decodes it, updates a book, runs a strategy that fires an order back, and measures the whole path with hardware timestamps and per stage attribution. The point is to know where every nanosecond goes and to report the tail honestly.
 
-The market data is a real venue day. A full NASDAQ TotalView-ITCH session is replayed through the [gavel](https://github.com/yussypu/gavel) matching engine, and caliper reacts to what the engine publishes. So the flow has the structure of real order flow, not a generator's statistics. See `docs/feed.md` for the pipeline.
+The market data is a real venue day. A full NASDAQ TotalView-ITCH session is replayed through the [gavel](../gavel) matching engine, and caliper reacts to what the engine publishes. So the flow has the structure of real order flow, not a generator's statistics. See `docs/feed.md` for the pipeline.
 
 ## what it measures
 
@@ -23,11 +23,16 @@ The exchange side is gavel, a deterministic matching engine. It ingests a real N
 
 ## results
 
-All numbers come from `make bench` on the host described in [system setup](#system-setup) and recorded in full in `results/host.md`. Report the full spectrum, not the mean. Means hide the tail and the tail is the product.
+The feed is the real AAPL trading day of 2020-01-30, 2,082,454 book updates produced by replaying the NASDAQ ITCH session through gavel and normalizing the published events (`docs/feed.md`). Report the full spectrum, not the mean. Means hide the tail and the tail is the product.
 
-**What these numbers are.** The feed is the real AAPL trading day of 2020-01-30, 2,082,454 book updates produced by replaying the NASDAQ ITCH session through gavel and normalizing the published events (`docs/feed.md`). The run is on a single box with one physical port that is also the host lifeline, so there is no true NIC hardware wire to wire (that needs two cabled ports or two hosts). The closed loop runs over a real AF_XDP datapath on a veth pair, and `rx_ts` and `tx_ts` are `rdtscp` reads at the ring boundary, software timestamps, not NIC PTP. The wire to wire number below is the userspace loop across that datapath, and its tx leg includes the `sendto` wakeup the veth copy path needs. The representative, hardware independent figures are the per stage userspace costs. The run is on the kernel isolated core 2 (isolcpus, nohz_full, rcu_nocbs), the sender paces the feed to one packet per 4000 ns, and the umem is backed by 2 MB huge pages. See `results/host.md` for the full provenance.
+There are two configurations, and they measure different things. Both are published, neither overwrites the other.
 
-Wire to wire over the AF_XDP veth loop, software timestamps (rdtscp endpoints). The corrected and uncorrected columns agree because the sender offers a real paced load the loop keeps up with, so there is almost nothing for the CO correction to back fill:
+1. **AF_XDP bypass**, one box, `results/`. The closed loop runs over a real AF_XDP datapath on a veth pair, and `rx_ts` and `tx_ts` are `rdtscp` reads at the ring boundary, software timestamps, not NIC PTP, with the tx leg including the veth `sendto` wakeup. This config isolates the userspace compute, the per stage costs, on the kernel isolated core 2.
+2. **NIC hardware wire to wire**, two hosts, `results/hardware/`. A second host replays the day to a `SO_TIMESTAMPING` socket on `enp35s0.4000`, so `rx_ts` and `tx_ts` are real igb PHC hardware stamps and tick to trade is a true NIC to NIC measurement that includes the kernel rx and tx path. This config closes the software endpoint caveat: it is not bypass, it is the honest socket datapath cost.
+
+### AF_XDP bypass, the compute measurement
+
+The run is on the kernel isolated core 2 (isolcpus, nohz_full, rcu_nocbs), the sender paces the feed to one packet per 4000 ns, and the umem is on 2 MB huge pages. `rx` and `tx` are `rdtscp` reads bracketing the AF_XDP rings, not hardware stamps; the representative figures are the per stage userspace costs. See `results/host.md`. The corrected and uncorrected columns agree because the sender offers a real paced load the loop keeps up with, so there is almost nothing for the CO correction to back fill:
 
 | percentile | uncorrected | CO corrected |
 | --- | --- | --- |
@@ -54,6 +59,21 @@ The book stage is 20 ns at the median because the best bid and ask are maintaine
 PMU over the whole run, userspace: branch misses 12.96M (about 6 per update, down from 15.87M before the incremental best removed the scan exit mispredicts), L1d misses 53.8M, dTLB misses 5234 with the umem on huge pages, down from 1.43M on base pages. The huge page dTLB figure is the one counter that moves run to run, from a few hundred to a few thousand; the base page count is steady near 1.4M and the effect is robust at the thousand fold scale (hunt writeup finding C). LLC misses are not countable through the generic perf interface on this Zen part, so that counter reports unavailable rather than a fabricated value.
 
 Full CDFs for each stage are in `results/`, in nanoseconds. Every chart is a CDF. There are no bar charts of averages in this repo.
+
+### NIC hardware wire to wire, the honest socket datapath
+
+This configuration closes the software endpoint caveat. A second host replays the AAPL day to a `SO_TIMESTAMPING` socket on `enp35s0.4000` over a vSwitch at 10000 pps, and caliper reacts on the kernel isolated core 2. `rx_ts` and `tx_ts` are real igb PHC hardware stamps, matched to the order by `OPT_ID`, so tick to trade is a true NIC to NIC measurement that includes the kernel rx and tx path, the NIC, and the wire. Over 2,082,382 orders the hardware tx stamp yield was 100.00 percent. Provenance in `results/hardware/host.md`.
+
+| percentile | uncorrected | CO corrected |
+| --- | --- | --- |
+| p50 | 28655 ns | 28655 ns |
+| p99 | 32239 ns | 32239 ns |
+| p99.9 | 35295 ns | 35359 ns |
+| p99.99 | 81791 ns | 85375 ns |
+| p99.999 | 174207 ns | 174207 ns |
+| max | 272162 ns | 272162 ns |
+
+The per stage rdtscp compute is identical to the bypass run, decode 10, book 30, decide 10, encode 20 ns at p50, because the compute is transport independent. The decomposition is the point: the 28655 ns median minus the 70 ns of per stage compute leaves about 28585 ns of kernel rx, kernel tx, NIC, and wire (hunt writeup finding G). That roughly 28.6 us is the kernel and NIC tax the bypass path avoids, and it is why colocated systems run AF_XDP or DPDK. The tail past p99.99 is kernel scheduling and softirq jitter off the isolated core, which the bypass path does not pay because it polls the rings on the hot core. The two configurations bracket the path: the bypass run isolates the 70 ns of compute, the hardware run shows what the kernel and NIC add on top.
 
 ## measurement methodology
 

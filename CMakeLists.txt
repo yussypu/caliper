@@ -50,12 +50,23 @@ else()
   add_compile_definitions(CALIPER_BOOK_FULLSCAN=0)
 endif()
 
+# Use the SO_TIMESTAMPING NIC hardware timestamp backend instead of the af_xdp
+# veth backend. On gives real wire to wire on a second host, off keeps the
+# bypass compute measurement over the veth pair. The two never compile together.
+option(CALIPER_HW_TIMESTAMP "SO_TIMESTAMPING NIC hardware timestamp backend" OFF)
+if(CALIPER_HW_TIMESTAMP)
+  add_compile_definitions(CALIPER_HW_TIMESTAMP=1)
+else()
+  add_compile_definitions(CALIPER_HW_TIMESTAMP=0)
+endif()
+
 set(CALIPER_SOURCES
   src/timing/tsc.cpp
   src/hist/hist.cpp
   src/book/book.cpp
   src/rx/sim_transport.cpp
   src/rx/af_xdp.cpp
+  src/rx/so_timestamping.cpp
   src/pmu/pmu_null.cpp
   src/pmu/pmu_perf.cpp
   src/harness/main.cpp
@@ -70,7 +81,8 @@ target_link_libraries(caliper PRIVATE Threads::Threads)
 # The native AF_XDP backend needs libxdp and libbpf. Only x86_64 Linux builds
 # the native path, so the portable build on other hosts does not require them.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
-   CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+   CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64" AND
+   NOT CALIPER_HW_TIMESTAMP)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(LIBXDP REQUIRED libxdp)
   pkg_check_modules(LIBBPF REQUIRED libbpf)

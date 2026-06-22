@@ -1,6 +1,6 @@
 #include "common/platform.h"
 
-#if CALIPER_NATIVE
+#if CALIPER_NATIVE && !CALIPER_HW_TIMESTAMP
 
 #include <xdp/xsk.h>
 
@@ -484,8 +484,10 @@ BookBand Transport::book_band() const {
   return b;
 }
 
+bool Transport::wire_hardware() const { return false; }
+
 const char* Transport::backend() const { return "af_xdp-veth"; }
 
 }  // namespace caliper
 
-#endif  // CALIPER_NATIVE
+#endif  // CALIPER_NATIVE && !CALIPER_HW_TIMESTAMP
