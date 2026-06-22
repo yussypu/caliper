@@ -63,8 +63,9 @@ to the numbers.
   costs: decode, book, decide, encode, each measured by rdtscp with the clock
   overhead subtracted.
 - umem: 8 MB of frames backed by 2 MB huge pages (mmap MAP_HUGETLB, base page
-  fallback if none reserved). This holds dTLB misses at about 1.2k over the run,
-  down from 1.5M on base pages. See docs/hunt.md finding C.
+  fallback if none reserved). This holds dTLB misses to a few thousand over the
+  run, 5234 on the canonical run, down from 1.43M on base pages. See docs/hunt.md
+  finding C.
 - offered load: the sender paces the feed to one packet per 4000 ns on a fixed
   time grid, a cadence the closed loop sustains, so the CO correction is measured
   against a load the harness enforces. See docs/hunt.md finding D.
@@ -74,12 +75,13 @@ to the numbers.
 - 2,082,454 real book updates replayed at one per 4000 ns, the strategy reacting
   on a two sided penny book
 - per stage all flat from p50 to p99.99 on the kernel isolated core: decode p50
-  10 ns p99.99 110 ns, book p50 20 ns p99.99 350 ns (incremental best, finding F),
-  tick to trade p50 2391 ns p99.99 3351 ns, max 12.4 us
-- PMU userspace: branch misses 12.6M (down from 15.8M once the incremental best
-  removed the scan exit mispredicts), L1d misses 51.2M, dTLB misses 304 on huge
-  pages, LLC unavailable on this Zen part. Userspace IPC is low because the
-  compute is now small enough that the loop waits on the next paced packet
+  10 ns p99.99 110 ns, book p50 20 ns p99.99 380 ns (incremental best, finding F),
+  tick to trade p50 2402 ns p99.99 3362 ns, max 13.4 us
+- PMU userspace: branch misses 12.96M (down from 15.87M once the incremental best
+  removed the scan exit mispredicts), L1d misses 53.8M, dTLB misses 5234 on huge
+  pages (down from 1.43M base; the huge page figure varies run to run, finding C),
+  LLC unavailable on this Zen part. Userspace IPC is low because the compute is
+  now small enough that the loop waits on the next paced packet
 - load: tick to trade holds flat from 100 kpps to about 5 Mpps with no saturation
   knee in range, results/latency_vs_load.csv. Per knob ablation in docs/hunt.md
 - output: results/tick_to_trade.csv, tick_to_trade_co.csv, latency_vs_load.csv,

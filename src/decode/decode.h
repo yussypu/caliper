@@ -9,8 +9,10 @@
 // Wire bytes to internal message. The internal form is the same packed struct,
 // so decode is a length checked load with no branch on message type. The type
 // dispatch the hunt writeup tracks for branch mispredict lives in book.apply,
-// not here. decode reads the frame the receive path just wrote, so its cost is
-// dominated by that first cold load, which the rx prefetch hides.
+// not here. decode reads the frame the receive path just wrote. Under a paced
+// feed the frame is warm by the time decode reads it, so the cold load the
+// synthetic bursts exposed is off the path; an explicit prefetch measured as no
+// further help and ships off, see the hunt writeup finding A.
 
 namespace caliper {
 

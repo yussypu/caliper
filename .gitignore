@@ -4,3 +4,4 @@ bridge/build/
 data/
 *.o
 *.dSYM/
+.DS_Store

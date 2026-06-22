@@ -31,27 +31,27 @@ Wire to wire over the AF_XDP veth loop, software timestamps (rdtscp endpoints). 
 
 | percentile | uncorrected | CO corrected |
 | --- | --- | --- |
-| p50 | 2391 ns | 2391 ns |
-| p99 | 2891 ns | 2891 ns |
-| p99.9 | 3102 ns | 3102 ns |
-| p99.99 | 3351 ns | 3362 ns |
-| p99.999 | 3611 ns | 3651 ns |
-| max | 12380 ns | 12380 ns |
+| p50 | 2402 ns | 2402 ns |
+| p99 | 2902 ns | 2902 ns |
+| p99.9 | 3122 ns | 3122 ns |
+| p99.99 | 3362 ns | 3362 ns |
+| p99.999 | 3662 ns | 3671 ns |
+| max | 13430 ns | 13430 ns |
 
 Per stage, userspace, `rdtscp` with clock overhead subtracted (the representative numbers):
 
 | stage | p50 | p99 | p99.9 | p99.99 | max |
 | --- | --- | --- | --- | --- | --- |
-| decode | 10 | 100 | 100 | 110 | 560 |
-| book | 20 | 40 | 150 | 350 | 9680 |
-| decide | 10 | 10 | 20 | 20 | 490 |
-| encode | 20 | 30 | 90 | 350 | 650 |
+| decode | 10 | 100 | 100 | 110 | 430 |
+| book | 20 | 30 | 100 | 380 | 650 |
+| decide | 10 | 10 | 20 | 30 | 500 |
+| encode | 20 | 30 | 130 | 380 | 600 |
 
 `rx` and `tx` are not separately timestamped on this box; they are software reads bracketing the AF_XDP rings, so they are reported only as part of the wire to wire number above, not as hardware stages. With the core kernel isolated the per stage rows stay flat from p50 to p99.99; the residual max is the rare host event the writeup tracks (`results/host.md`).
 
 The book stage is 20 ns at the median because the best bid and ask are maintained incrementally rather than by rescanning the ladder (hunt writeup finding F). With the userspace compute that small, tick to trade is bound by the tx wakeup, not by caliper's work, which is also why userspace IPC reads low: the loop spends its cycles waiting for the next paced packet, not retiring instructions.
 
-PMU over the whole run, userspace: branch misses 12.6M (about 6 per update, down from 15.8M before the incremental best removed the scan exit mispredicts), L1d misses 51.2M, dTLB misses 304 with the umem on huge pages, down from 1.41M on base pages. LLC misses are not countable through the generic perf interface on this Zen part, so that counter reports unavailable rather than a fabricated value.
+PMU over the whole run, userspace: branch misses 12.96M (about 6 per update, down from 15.87M before the incremental best removed the scan exit mispredicts), L1d misses 53.8M, dTLB misses 5234 with the umem on huge pages, down from 1.43M on base pages. The huge page dTLB figure is the one counter that moves run to run, from a few hundred to a few thousand; the base page count is steady near 1.4M and the effect is robust at the thousand fold scale (hunt writeup finding C). LLC misses are not countable through the generic perf interface on this Zen part, so that counter reports unavailable rather than a fabricated value.
 
 Full CDFs for each stage are in `results/`, in nanoseconds. Every chart is a CDF. There are no bar charts of averages in this repo.
 
@@ -82,7 +82,7 @@ A latency number without the host configuration is not reproducible. `scripts/ho
 
 ## the hunt
 
-The headline is the drop, for example "drove p99.99 tick to trade from X ns to Y ns". The body is how each tail cause was found. Each entry follows the same shape so the chase is legible.
+The headline is the drop. The incremental best bid and ask drove the book stage from 210 ns to 20 ns; kernel isolation drove decode p99.99 from 2671 ns to 110 ns. The body is how each tail cause was found. Each entry follows the same shape so the chase is legible.
 
 Template per finding:
 
@@ -92,7 +92,7 @@ Template per finding:
 > **fix.** The change.
 > **result.** Before and after percentiles.
 
-The full writeup is in `docs/hunt.md`, with a per knob ablation and the load sweep. Six findings carry a before and after: the decode tail was an unpaced burst artifact and went from p50 110 ns to 10 ns once the load was paced; the tails past p99.9 were host timer noise and fell to meet p99.9 once the core was kernel isolated; dTLB misses went from 1.4M to a few hundred once the umem moved to huge pages; the coordinated omission correction stopped overcorrecting once the offered cadence was enforced; the branch mispredict suspected in the book type switch was refuted on the real day; and an incremental best bid and ask replaced the O(n) ladder scan, dropping the book stage from 200 ns to 20 ns and confirming the scan exit was where the mispredicts lived. Two of the six are measured negatives, which real data is for. Tick to trade holds flat from 100 kpps to about 5 Mpps with no saturation knee in range. The two template findings below still need a before and after each, so `docs/hunt.md` keeps their result lines open rather than carrying invented numbers.
+The full writeup is in `docs/hunt.md`, with a per knob ablation and the load sweep. Every current state number there comes from one canonical run, the one in `results/`, and each finding toggles a single knob from it, except kernel isolation and pacing, whose before states are labeled earlier runs because neither can be toggled in place. Six findings carry a before and after: the decode tail was an unpaced burst artifact and went from p50 110 ns to 10 ns once the load was paced; the tails past p99.9 were host timer noise and fell to meet p99.9 once the core was kernel isolated; dTLB misses went from 1.43M to a few thousand once the umem moved to huge pages; the coordinated omission correction stopped overcorrecting once the offered cadence was enforced; the branch mispredict suspected in the book type switch was refuted on the real day; and an incremental best bid and ask replaced the O(n) ladder scan, dropping the book stage from 210 ns to 20 ns and confirming the scan exit was where the mispredicts lived. Two of the six are measured negatives, which real data is for. Tick to trade holds flat from 100 kpps to about 5 Mpps with no saturation knee in range. The two template findings below still need a before and after each, so `docs/hunt.md` keeps their result lines open rather than carrying invented numbers.
 
 ### 1. first touch page fault on the order buffer
 
@@ -112,9 +112,9 @@ The full writeup is in `docs/hunt.md`, with a per knob ablation and the load swe
 
 ### 3. branch mispredict, hypothesis refuted on real flow
 
-- symptom: branch misses run about 8 per update on the real AAPL day, more than the straight line stages explain. The first suspect was the `switch (m.type)` in book.apply.
-- measurement: built a branchless cmov dispatch (`-DCALIPER_BOOK_BRANCHLESS=ON`) and ran it against the switch on the real day. Branch misses did not move: 16.9M with the switch, 16.4M branchless, inside the run variance.
-- cause: the switch was not the mispredict source. The data dependent exit of the best bid and ask scan in refresh() is.
+- symptom: branch misses run about 6 per update on the real AAPL day, more than the straight line stages explain. The first suspect was the `switch (m.type)` in book.apply.
+- measurement: built a branchless cmov dispatch (`-DCALIPER_BOOK_BRANCHLESS=ON`) and toggled it on the canonical run. Branch misses did not move: 12.96M with the switch, 13.08M branchless.
+- cause: the switch was not the mispredict source. The data dependent exit of the best bid and ask scan in refresh() is, which finding F removes.
 - fix: none shipped. The branchless dispatch is reverted, kept behind the flag.
 - result: closed as a measured negative, the kind real data is for. See `docs/hunt.md`.
 
