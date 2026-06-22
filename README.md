@@ -17,7 +17,7 @@ Stages on the hot path:
 5. encode: internal order to wire format.
 6. tx: userspace to NIC send, measured with NIC hardware TX timestamp where the card supports it.
 
-`rx` and `tx` come from the NIC PTP clock via `SO_TIMESTAMPING`. The userspace stages (`decode`, `book`, `decide`, `encode`) come from `rdtscp` reads at stage boundaries. The two clocks are reconciled once at startup so stage sums line up with the wire to wire number.
+There are two configurations. In the hardware configuration `rx` and `tx` are real NIC PHC stamps from `SO_TIMESTAMPING` across two hosts, so the wire to wire is a true NIC to NIC number through the kernel socket path. In the AF_XDP bypass configuration on one box they are `rdtscp` reads at the ring boundary, which isolates the userspace compute. The per stage costs (`decode`, `book`, `decide`, `encode`) are always `rdtscp` and transport independent. The wire to wire does not equal the sum of the stages: the gap between them is the kernel rx and tx path plus the NIC, about 28.6 us, which the hardware run measures and the bypass run avoids. See the results below and `docs/hunt.md` finding G.
 
 The exchange side is gavel, a deterministic matching engine. It ingests a real NASDAQ trading day, matches under price time priority, and publishes an event stream. A bridge normalizes that stream into caliper book updates, the off core sender replays them on the wire, and caliper reacts. gavel is the venue, caliper is the colocated reactor. See `docs/feed.md`.
 
@@ -112,7 +112,7 @@ Template per finding:
 > **fix.** The change.
 > **result.** Before and after percentiles.
 
-The full writeup is in `docs/hunt.md`, with a per knob ablation and the load sweep. Every current state number there comes from one canonical run, the one in `results/`, and each finding toggles a single knob from it, except kernel isolation and pacing, whose before states are labeled earlier runs because neither can be toggled in place. Six findings carry a before and after: the decode tail was an unpaced burst artifact and went from p50 110 ns to 10 ns once the load was paced; the tails past p99.9 were host timer noise and fell to meet p99.9 once the core was kernel isolated; dTLB misses went from 1.43M to a few thousand once the umem moved to huge pages; the coordinated omission correction stopped overcorrecting once the offered cadence was enforced; the branch mispredict suspected in the book type switch was refuted on the real day; and an incremental best bid and ask replaced the O(n) ladder scan, dropping the book stage from 210 ns to 20 ns and confirming the scan exit was where the mispredicts lived. Two of the six are measured negatives, which real data is for. Tick to trade holds flat from 100 kpps to about 5 Mpps with no saturation knee in range. The two template findings below still need a before and after each, so `docs/hunt.md` keeps their result lines open rather than carrying invented numbers.
+The full writeup is in `docs/hunt.md`, with a per knob ablation and the load sweep. Findings A through F come from one canonical AF_XDP run in `results/`, each toggling a single knob from it, except kernel isolation and pacing, whose before states are labeled earlier runs because neither can be toggled in place; finding G is the separate two host hardware run in `results/hardware/`. Seven findings carry a before and after: the decode tail was an unpaced burst artifact and went from p50 110 ns to 10 ns once the load was paced; the tails past p99.9 were host timer noise and fell to meet p99.9 once the core was kernel isolated; dTLB misses went from 1.43M to a few thousand once the umem moved to huge pages; the coordinated omission correction stopped overcorrecting once the offered cadence was enforced; the branch mispredict suspected in the book type switch was refuted on the real day; an incremental best bid and ask replaced the O(n) ladder scan, dropping the book stage from 210 ns to 20 ns and confirming the scan exit was where the mispredicts lived; and the hardware run decomposed a real NIC to NIC wire to wire, leaving about 28.6 us of kernel and NIC path once the 70 ns of compute is subtracted. Two of the seven are measured negatives, which real data is for. Tick to trade holds flat from 100 kpps to about 5 Mpps with no saturation knee in range. The two template findings below still need a before and after each, so `docs/hunt.md` keeps their result lines open rather than carrying invented numbers.
 
 ### 1. first touch page fault on the order buffer
 
@@ -162,14 +162,17 @@ cd ../caliper && scripts/build_feed.sh        # writes data/AAPL.feed
 
 Without a feed file caliper falls back to the synthetic generator, so it still builds and runs anywhere. `docs/feed.md` has the full pipeline.
 
-The run replays the feed pattern as raw UDP frames from an off core sender, reacts to each, records corrected and uncorrected histograms, and writes the percentile tables and CDFs to `results/`. On a host with two ports or a second box, point the sender at the real wire and the rx and tx endpoints become NIC hardware timestamps.
+The run replays the feed pattern as raw UDP frames from an off core sender, reacts to each, records corrected and uncorrected histograms, and writes the percentile tables and CDFs to `results/`.
+
+**Hardware wire to wire, two hosts.** Build with `-DCALIPER_HW_TIMESTAMP=ON` to compile the `SO_TIMESTAMPING` backend instead of AF_XDP. It binds a real NIC and reads NIC PHC hardware stamps, so with a second host replaying the feed over the wire the endpoints are real hardware timestamps, not rdtscp. `CALIPER_OUT=results/hardware` keeps it separate from the bypass run. This is the configuration behind `results/hardware/`; the two never compile together.
 
 ## layout
 
 ```
 src/
-  rx/          receive and send transport: af_xdp.cpp (native, real AF_XDP
-               rings, plus the off core feed sender) and sim_transport.cpp
+  rx/          receive and send transport: af_xdp.cpp (native bypass, AF_XDP
+               rings plus the off core feed sender), so_timestamping.cpp (real
+               NIC hardware stamps over a socket, two host), sim_transport.cpp
                (portable). tx is the transport send leg, not a separate dir.
   decode/      wire to internal
   book/        order book
@@ -180,19 +183,22 @@ src/
   pmu/         perf_event_open counter reads (pmu_perf.cpp native)
 bridge/         gavel_to_feed: runs the gavel engine over a real venue day and
                 normalizes the published events into a caliper feed file
+tools/          hwstamp_check and burst_check: validate the NIC hardware stamps
+                before the so_timestamping run trusts them
 scripts/
   host_setup.sh   governor, boost, SMT sibling, IRQ affinity, hugepages, C states
   setup_veth.sh   the calib0/calib1 veth pair the native backend binds to
   build_feed.sh   builds the bridge and writes data/SYMBOL.feed
   run_bench.sh
 data/           the feed file the run replays (SYMBOL.feed, not committed)
-results/        percentile tables, per stage CDFs, latency_vs_load.csv, host.md
+results/        af_xdp bypass: percentile tables, per stage CDFs, host.md
+results/hardware/  the two host NIC hardware wire to wire run, with host.md
 docs/           hunt.md the tail writeup with ablation, feed.md the data pipeline
 ```
 
 ## hardware notes
 
-This targets x86_64 with kernel bypass. The hot path uses AF_XDP, with DPDK as an option for the cards that warrant it. Hardware timestamps need a NIC with a PTP clock and TX timestamping. The headline numbers are taken on bare metal Linux x86_64, not a VM and not ARM, because `isolcpus`, kernel bypass, and PMU access need the real machine.
+This targets x86_64 with kernel bypass. The bypass hot path uses AF_XDP, with DPDK as an option for the cards that warrant it. The hardware wire to wire run uses NIC hardware timestamps, which need a NIC with a PTP clock and TX timestamping; here that is an Intel I210 (igb) with a PHC, driven across two hosts on a vSwitch. The numbers are taken on bare metal Linux x86_64, not a VM and not ARM, because `isolcpus`, kernel bypass, PMU access, and NIC hardware timestamping need the real machine.
 
 ## references
 

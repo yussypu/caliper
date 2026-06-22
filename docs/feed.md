@@ -92,7 +92,9 @@ Real: the order flow, the message type mix, the price and size distribution, the
 book dynamics. These come from a NASDAQ trading day through a matching engine
 that passes a fidelity check against the day's actual executions.
 
-Not real on this one box: the wire to wire timestamps are rdtscp software reads
-over an AF_XDP veth pair, not NIC hardware timestamps, as `results/host.md` and
-the run banner state. The representative numbers are the per stage userspace
-costs, now measured against real flow.
+Two timestamp configurations. The AF_XDP bypass run on one box uses rdtscp
+software reads over a veth pair, not NIC stamps, which isolates the per stage
+userspace compute. The hardware run uses real igb PHC stamps across two hosts
+over a vSwitch, so its wire to wire is a true NIC to NIC measurement that
+includes the kernel rx and tx path. Both are published, in `results/` and
+`results/hardware/`, each with its own provenance. See `docs/hunt.md` finding G.

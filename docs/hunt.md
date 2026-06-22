@@ -4,15 +4,17 @@ Each entry traces one tail to its cause and records the before and after. The
 template is fixed so the chase stays legible: symptom, measurement, cause, fix,
 result.
 
-Provenance. Every current state number comes from one canonical run, the one
+Provenance. Findings A through F come from one canonical AF_XDP run, the one
 written to `results/`: the real AAPL day, the book maintaining its best
 incrementally, core 2 kernel isolated, the feed paced to 4000 ns, the umem on
-huge pages. Each finding toggles a single knob from that run and reports the
-same baseline as its after, so the after of one knob is the canonical number.
-Two knobs cannot be toggled in place: kernel isolation needs a reboot and pacing
-changes the offered load. Their before states are therefore earlier runs on the
-synthetic feed and are labeled as such, so a reader never mistakes a cross
-generation before for a single toggle.
+huge pages. Each toggles a single knob from that run and reports the same
+baseline as its after, so the after of one knob is the canonical number. Two
+knobs cannot be toggled in place: kernel isolation needs a reboot and pacing
+changes the offered load. Their before states are earlier runs on the synthetic
+feed and are labeled as such. Finding G is a second configuration, the
+so_timestamping run across two hosts with real NIC hardware stamps, written to
+`results/hardware/` with its own provenance; it is not the bypass run and is
+labeled wherever its numbers appear.
 
 A note on honesty. A negative result that was measured and reverted is kept
 above the line, because a measured no is worth as much as a measured yes. The
