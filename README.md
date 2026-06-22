@@ -2,7 +2,7 @@
 
 A closed loop tick to trade latency lab on x86_64. It takes market data in over the wire, decodes it, updates a book, runs a strategy that fires an order back, and measures the whole path with hardware timestamps and per stage attribution. The point is to know where every nanosecond goes and to report the tail honestly.
 
-The market data is a real venue day. A full NASDAQ TotalView-ITCH session is replayed through the [gavel](../gavel) matching engine, and caliper reacts to what the engine publishes. So the flow has the structure of real order flow, not a generator's statistics. See `docs/feed.md` for the pipeline.
+The market data is a real venue day. A full NASDAQ TotalView-ITCH session is replayed through the [gavel](https://github.com/yussypu/gavel) matching engine, and caliper reacts to what the engine publishes. So the flow has the structure of real order flow, not a generator's statistics. See `docs/feed.md` for the pipeline.
 
 ## what it measures
 
